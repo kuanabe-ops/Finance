@@ -3,7 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <!-- 引入 Chart.js -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- 引入 Supabase JS Client -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <style>
         :root {
             --bg: #000000;
@@ -108,9 +111,18 @@
         .tab-item { flex: 1; text-align: center; font-size: 20px; color: var(--text-dim); transition: 0.2s; }
         .tab-item.active { color: var(--accent); transform: scale(1.1); }
         .icon-line { font-family: sans-serif; font-style: normal; font-weight: 100; }
+        
+        /* 載入中覆蓋層 */
+        #loader {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: var(--bg); display: flex; align-items: center; justify-content: center;
+            z-index: 999; color: var(--text); font-size: 18px; font-weight: bold;
+        }
     </style>
 </head>
 <body>
+
+<div id="loader">載入資料中...</div>
 
 <div class="app-container">
     <div class="content">
@@ -210,7 +222,12 @@
 </div>
 
 <script>
-    let db = JSON.parse(localStorage.getItem('fin_v6')) || {
+    const SUPABASE_URL = 'https://kwrefnmhjuwnvfipxdyq.supabase.co';
+    const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt3cmVmbm1oanV3bnZmaXB4ZHlxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzEyOTQ4NTksImV4cCI6MjA4Njg3MDg1OX0.jthw2efO6SSzIm0PpY0scQ9cBrAtByEzxxrzz1YOHlc';
+    const { createClient } = supabase;
+    const supabaseClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    let db = {
         base: { month: "", balance: 0 },
         estimates: [],
         actuals: []
@@ -220,7 +237,32 @@
     let mainChart = null, yAxisChart = null;
     let selectedMonths = new Set([1,2,3,4,5,6,7,8,9,10,11,12]);
 
-    function init() {
+    async function loadData() {
+        try {
+            const { data: baseData } = await supabaseClient.from('settings').select('*').eq('id', 1).single();
+            if (baseData) {
+                db.base = { month: baseData.base_month || "", balance: Number(baseData.base_balance) || 0 };
+            }
+            const { data: estData } = await supabaseClient.from('estimates').select('*');
+            if (estData) {
+                db.estimates = estData.map(e => ({
+                    id: e.id, name: e.name, amount: Number(e.amount), type: e.type,
+                    start: e.start_month || "", end: e.end_month || "", months: e.months
+                }));
+            }
+            const { data: actData } = await supabaseClient.from('actuals').select('*');
+            if (actData) {
+                db.actuals = actData.map(a => ({
+                    month: a.month, income: Number(a.income), balance: Number(a.balance), note: a.note || ""
+                }));
+                db.actuals.sort((a,b) => a.month.localeCompare(b.month));
+            }
+        } catch (err) {
+            console.error("載入資料發生錯誤：", err);
+        }
+    }
+
+    async function init() {
         const grid = document.getElementById('est-months-grid');
         for(let i=1; i<=12; i++) {
             const chip = document.createElement('div');
@@ -232,6 +274,8 @@
             };
             grid.appendChild(chip);
         }
+        await loadData();
+        document.getElementById('loader').style.display = 'none';
         if(db.base.month) {
             document.getElementById('base-month').value = db.base.month;
             document.getElementById('base-balance').value = db.base.balance;
@@ -328,58 +372,50 @@
         });
     }
 
-    function updateBase() {
+    async function updateBase() {
         db.base.month = document.getElementById('base-month').value;
         db.base.balance = parseFloat(document.getElementById('base-balance').value) || 0;
-        save();
+        await supabaseClient.from('settings').upsert({ id: 1, base_month: db.base.month, base_balance: db.base.balance });
+        renderLists(); renderChart();
     }
 
-    function saveEstimate() {
+    async function saveEstimate() {
         const id = document.getElementById('edit-id-est').value;
-        const item = {
-            id: id ? parseInt(id) : Date.now(),
-            name: document.getElementById('est-name').value || "未命名",
-            amount: parseFloat(document.getElementById('est-amount').value) || 0,
-            type: document.getElementById('est-type').value,
-            start: document.getElementById('est-start').value,
-            end: document.getElementById('est-end').value,
-            months: Array.from(selectedMonths)
-        };
-        if(id) db.estimates = db.estimates.map(e => e.id === item.id ? item : e);
-        else db.estimates.push(item);
-        save(); closeModal('est');
+        const name = document.getElementById('est-name').value || "未命名";
+        const amount = parseFloat(document.getElementById('est-amount').value) || 0;
+        const type = document.getElementById('est-type').value;
+        const start_month = document.getElementById('est-start').value || null;
+        const end_month = document.getElementById('est-end').value || null;
+        const months = Array.from(selectedMonths);
+        const payload = { name, amount, type, start_month, end_month, months };
+        if (id) { await supabaseClient.from('estimates').update(payload).eq('id', parseInt(id)); }
+        else { await supabaseClient.from('estimates').insert([payload]); }
+        await loadData();
+        renderLists(); renderChart(); closeModal('est');
     }
 
-    function saveActual() {
+    async function saveActual() {
         const month = document.getElementById('act-month').value;
         if(!month) return alert("請選擇月份");
-        const item = {
-            month,
-            income: parseFloat(document.getElementById('act-income').value) || 0,
-            balance: parseFloat(document.getElementById('act-balance').value) || 0,
-            note: document.getElementById('act-note').value
-        };
-        db.actuals = db.actuals.filter(a => a.month !== month);
-        db.actuals.push(item);
-        db.actuals.sort((a,b) => a.month.localeCompare(b.month));
-        save(); closeModal('act');
+        const income = parseFloat(document.getElementById('act-income').value) || 0;
+        const balance = parseFloat(document.getElementById('act-balance').value) || 0;
+        const note = document.getElementById('act-note').value;
+        await supabaseClient.from('actuals').upsert({ month, income, balance, note });
+        await loadData();
+        renderLists(); renderChart(); closeModal('act');
     }
 
-    function deleteItem(type) {
+    async function deleteItem(type) {
         if(!confirm("確定要刪除這筆資料嗎？")) return;
         if(type === 'est') {
             const id = parseInt(document.getElementById('edit-id-est').value);
-            db.estimates = db.estimates.filter(e => e.id !== id);
+            await supabaseClient.from('estimates').delete().eq('id', id);
         } else {
             const month = document.getElementById('act-month').value;
-            db.actuals = db.actuals.filter(a => a.month !== month);
+            await supabaseClient.from('actuals').delete().eq('month', month);
         }
-        save(); closeModal(type);
-    }
-
-    function save() {
-        localStorage.setItem('fin_v6', JSON.stringify(db));
-        renderLists(); renderChart();
+        await loadData();
+        renderLists(); renderChart(); closeModal(type);
     }
 
     function editEst(id) {
@@ -427,7 +463,6 @@
         document.getElementById('top-sub').innerText = `收: ${(thisM.estInc/1000).toFixed(1)}K | 支: ${(thisM.estExp/1000).toFixed(1)}K`;
 
         const ctx = document.getElementById('mainChart').getContext('2d');
-        // 加入年份：將 2026-03 轉為 2026/03
         const labels = timeline.map(t => t.month.replace('-', '/'));
         const kFormat = (v) => v === null ? null : (v/1000).toFixed(0) + 'K';
 
@@ -435,8 +470,11 @@
             data: {
                 labels: labels,
                 datasets: [
-                    { type: 'line', label: '預估結餘', data: timeline.map(t => t.estBal), borderColor: '#FFCC00', borderDash: [5, 5], yAxisID: 'y1', tension: 0.4, pointRadius: 0, pointHitRadius: 30, borderWidth: 3, hidden: !filterState[0] },
-                    { type: 'line', label: '實際結餘', data: timeline.map(t => t.actBal), borderColor: '#FFCC00', yAxisID: 'y1', tension: 0.4, pointRadius: 4, pointHitRadius: 30, hidden: !filterState[1] },
+                    // 副軸 y2 (結餘線)
+                    { type: 'line', label: '預估結餘', data: timeline.map(t => t.estBal), borderColor: '#FFCC00', borderDash: [5, 5], yAxisID: 'y2', tension: 0.4, pointRadius: 0, pointHitRadius: 30, borderWidth: 3, hidden: !filterState[0] },
+                    { type: 'line', label: '實際結餘', data: timeline.map(t => t.actBal), borderColor: '#FFCC00', yAxisID: 'y2', tension: 0.4, pointRadius: 4, pointHitRadius: 30, hidden: !filterState[1] },
+                    
+                    // 主軸 y (收支長條圖)
                     { type: 'bar', label: '預估收入', data: timeline.map(t => t.estInc), backgroundColor: 'rgba(48, 209, 88, 0.4)', yAxisID: 'y', stack: 'est', hidden: !filterState[2] },
                     { type: 'bar', label: '實際收入', data: timeline.map(t => t.actInc), backgroundColor: '#30D158', yAxisID: 'y', stack: 'act', hidden: !filterState[3] },
                     { type: 'bar', label: '預估支出', data: timeline.map(t => t.estExp !== null ? -t.estExp : null), backgroundColor: 'rgba(255, 69, 58, 0.4)', yAxisID: 'y', stack: 'est', hidden: !filterState[4] },
@@ -445,20 +483,25 @@
             },
             options: {
                 responsive: true, maintainAspectRatio: false,
-                // 長條圖加粗
                 barPercentage: 1.0, categoryPercentage: 0.95,
                 scales: {
                     x: { stacked: true, grid: { display: false, drawBorder: false }, ticks: { color: '#888', font: { size: 10 } } },
-                    // y軸(長條圖) grace給到 60%，把長條圖整體高度壓下來
-                    y: { stacked: true, position: 'left', grace: '60%', ticks: { color: '#555', callback: kFormat }, grid: { color: '#222', drawBorder: false }, border: { display: false } },
-                    // y1軸(結餘線) grace給 10%，讓線條能浮在長條圖上方
-                    y1: { position: 'right', display: true, grace: '10%', ticks: { display: false }, grid: { display: false, drawBorder: false }, border: { display: false } }
+                    // 主軸：收入與支出 (放置於左側)
+                    y: { 
+                        type: 'linear', position: 'left',
+                        ticks: { color: '#8E8E93', callback: kFormat },
+                        grid: { color: '#222', drawBorder: false }, border: { display: false }
+                    },
+                    // 副軸：結餘 (設為 display: false，隱藏刻度以免視覺雜亂)
+                    y2: { 
+                        type: 'linear', position: 'right', 
+                        grid: { display: false }, ticks: { display: false }
+                    }
                 },
                 plugins: { 
                     legend: { display: false },
                     tooltip: {
                         callbacks: {
-                            // 將備註文字顯示在 Tooltip 最下方
                             footer: function(tooltipItems) {
                                 const note = timeline[tooltipItems[0].dataIndex].note;
                                 return note ? '備註: ' + note : null;
@@ -479,7 +522,11 @@
             options: { 
                 ...config.options, 
                 plugins: { legend: { display: false }, tooltip: { enabled: false } },
-                scales: { x: { stacked: true, display: false }, y: { ...config.options.scales.y, afterFit: (s) => s.width = 42 }, y1: { display: false } } 
+                scales: { 
+                    x: { display: false }, 
+                    y: { ...config.options.scales.y, afterFit: (s) => s.width = 42 },
+                    y2: { display: false }
+                } 
             }
         });
     }
@@ -489,6 +536,7 @@
         const timeline = [];
         const start = new Date(db.base.month + "-01");
         let runBalEst = db.base.balance, runBalAct = db.base.balance;
+        
         for(let i=0; i<=60; i++) {
             const d = new Date(start); d.setMonth(start.getMonth() + i);
             const mKey = d.toISOString().substring(0, 7);
@@ -501,16 +549,9 @@
             const act = db.actuals.find(a => a.month === mKey);
             let aI = act ? act.income : null, aB = act ? act.balance : null;
             let aE = act ? (runBalAct + aI - aB) : null;
-            let noteStr = act ? act.note : "";
-            
-            if(act) { 
-                runBalAct = aB; 
-                runBalEst = aB; 
-            } else { 
-                runBalEst = runBalEst + eI - eE; 
-            }
-            
-            timeline.push({ month: mKey, estInc: eI, estExp: eE, actInc: aI, actExp: aE, estBal: runBalEst, actBal: aB, note: noteStr });
+            if(act) { runBalAct = aB; runBalEst = aB; } 
+            else { runBalEst = runBalEst + eI - eE; }
+            timeline.push({ month: mKey, estInc: eI, estExp: eE, actInc: aI, actExp: aE, estBal: runBalEst, actBal: aB, note: act ? act.note : "" });
         }
         return timeline;
     }
