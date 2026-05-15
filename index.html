@@ -487,6 +487,24 @@
         const labels = timeline.map(t => t.month.replace('-', '/'));
         const kFormat = (v) => v === null ? null : (v/1000).toFixed(0) + 'K';
 
+        // 獨立計算 收支(y 軸) 的極值，並強制對稱
+        const cashFlowValues = timeline.flatMap(t => [
+            t.estInc,
+            t.estExp ? -t.estExp : null,
+            t.actInc,
+            t.actExp !== null ? -t.actExp : null
+        ]).filter(v => v !== null);
+        const maxCashFlow = Math.max(...cashFlowValues.map(Math.abs));
+        const yLimit = maxCashFlow === 0 ? 1000 : maxCashFlow * 1.1; // *1.1 給一點頂部留白
+
+        // 獨立計算 結餘(y2 軸) 的極值，並強制對稱
+        const balanceValues = timeline.flatMap(t => [
+            t.estBal,
+            t.actBal
+        ]).filter(v => v !== null);
+        const maxBalance = Math.max(...balanceValues.map(Math.abs));
+        const y2Limit = maxBalance === 0 ? 1000 : maxBalance * 1.1; // *1.1 給一點頂部留白
+
         const config = {
             data: {
                 labels: labels,
@@ -495,7 +513,7 @@
                     { type: 'line', label: '預估結餘', data: timeline.map(t => t.estBal), borderColor: '#FFCC00', borderDash: [5, 5], yAxisID: 'y2', tension: 0.4, pointRadius: 0, pointHitRadius: 10, borderWidth: 3, hidden: !filterState[0] },
                     { type: 'line', label: '實際結餘', data: timeline.map(t => t.actBal), borderColor: '#FFCC00', yAxisID: 'y2', tension: 0.4, pointRadius: 4, pointHitRadius: 10, hidden: !filterState[1] },
                     
-                    // 主軸 y (收支長條圖) - 將預估改為半透明背景，不再只畫單邊框，明確傳達「由 0 長出」的意象且更好點擊
+                    // 主軸 y (收支長條圖)
                     { type: 'bar', label: '實際收入', data: timeline.map(t => t.actInc), backgroundColor: 'rgba(48, 209, 88, 0.4)', yAxisID: 'y', grouped: false, hidden: !filterState[3] },
                     { type: 'bar', label: '預估收入', data: timeline.map(t => t.estInc ? t.estInc : null), backgroundColor: 'rgba(48, 209, 88, 0.15)', borderColor: '#30D158', borderWidth: 1, yAxisID: 'y', grouped: false, hidden: !filterState[2] },
                     { type: 'bar', label: '實際支出', data: timeline.map(t => t.actExp !== null ? -t.actExp : null), backgroundColor: 'rgba(255, 69, 58, 0.4)', yAxisID: 'y', grouped: false, hidden: !filterState[5] },
@@ -504,21 +522,21 @@
             },
             options: {
                 responsive: true, maintainAspectRatio: false,
-                // 設定為 point 模式，只會抓取「手指實際碰觸到的圖塊」，藉此完美區分上下半部的點擊
                 interaction: { mode: 'point', intersect: true }, 
-                barPercentage: 0.9, categoryPercentage: 0.95,
+                barPercentage: 0.6, categoryPercentage: 0.95,
                 scales: {
                     x: { grid: { display: false, drawBorder: false }, ticks: { color: '#888', font: { size: 10 } } },
                     y: { 
                         type: 'linear', position: 'left',
-                        beginAtZero: true, 
+                        min: -yLimit, 
+                        max: yLimit, 
                         ticks: { color: '#8E8E93', callback: kFormat },
-                        // 將數值為 0 的那條線特別打亮成 #666，強化上下分界的視覺錨點
                         grid: { color: (ctx) => ctx.tick && ctx.tick.value === 0 ? '#666' : '#222', drawBorder: false }, border: { display: false }
                     },
                     y2: { 
                         type: 'linear', position: 'right', 
-                        beginAtZero: true, 
+                        min: -y2Limit, 
+                        max: y2Limit, 
                         grid: { display: false }, ticks: { display: false }
                     }
                 },
@@ -534,7 +552,6 @@
                             },
                             afterLabel: function(context) {
                                 const tl = timeline[context.dataIndex];
-                                // 當被點擊的資料集是預估收入或支出時，才回傳對應的細項
                                 if (context.dataset.label === '預估收入' && tl.estIncDetails.length) {
                                     return tl.estIncDetails;
                                 }
