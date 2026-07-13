@@ -473,13 +473,16 @@
 
         let minBal = Infinity;
         let minMonth = '--';
-        timeline.forEach(t => {
-            let bal = t.actBal !== null ? t.actBal : t.estBal;
-            if (bal < minBal) {
-                minBal = bal;
-                minMonth = t.month;
-            }
-        });
+        timeline
+    .filter(t => t.month >= curMonth)
+    .forEach(t => {
+        const bal = t.actBal !== null ? t.actBal : t.estBal;
+
+        if (bal < minBal) {
+            minBal = bal;
+            minMonth = t.month;
+        }
+    });
         document.getElementById('top-min-bal').innerText = minBal === Infinity ? '0K' : (minBal/1000).toFixed(1) + 'K';
         document.getElementById('top-min-month').innerText = minMonth.replace('-', '/');
 
