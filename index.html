@@ -58,8 +58,8 @@
             position: relative; height: 380px; background: var(--bg);
             border-radius: 16px; overflow: hidden; display: flex;
         }
-        .y-axis-fixed { width: 42px; height: 100%; position: absolute; left: 0; top: 0; background: var(--bg); z-index: 5; }
-        .chart-scroll-area { flex: 1; overflow-x: auto; overflow-y: hidden; }
+        .y-axis-fixed { width: 42px; min-width: 42px; height: 100%; position: absolute; left: 0; top: 0; background: var(--bg); z-index: 5; overflow: hidden; }
+        .chart-scroll-area { flex: 1; min-width: 0; overflow-x: auto; overflow-y: hidden; }
         .chart-canvas-inner { min-width: 2600px; height: 100%; }
 
         /* 列表卡片 */
@@ -534,7 +534,8 @@
                         min: -yLimit, 
                         max: yLimit, 
                         ticks: { color: '#8E8E93', callback: kFormat },
-                        grid: { color: (ctx) => ctx.tick && ctx.tick.value === 0 ? '#666' : '#222', drawBorder: false }, border: { display: false }
+                        grid: { color: (ctx) => ctx.tick && ctx.tick.value === 0 ? '#666' : '#222', drawBorder: false }, border: { display: false },
+                        afterFit: (s) => s.width = 42
                     },
                     y2: { 
                         type: 'linear', position: 'right', 
@@ -551,7 +552,10 @@
                                 let label = context.dataset.label || '';
                                 let val = context.raw;
                                 if(val === null) return null;
-                                return `${label}: ${Math.abs(val).toLocaleString()}`;
+                                if(label === '預估支出' || label === '實際支出') {
+                                    return `${label}: ${Math.abs(val).toLocaleString()}`;
+                                }
+                                return `${label}: ${Number(val).toLocaleString()}`;
                             },
                             afterLabel: function(context) {
                                 const tl = timeline[context.dataIndex];
@@ -603,6 +607,7 @@
         let totalMonths = 60 + N;
 
         let prevBal = db.base.balance;
+        let prevActualBal = null;
         
         for(let i=0; i<=totalMonths; i++) {
             const d = new Date(start); d.setMonth(start.getMonth() + i);
@@ -630,7 +635,13 @@
             const act = db.actuals.find(a => a.month === mKey);
             let aI = act ? act.income : null;
             let aB = act ? act.balance : null;
-            let aE = act ? (prevBal + aI - aB) : null;
+            let aE = null;
+
+            if(act) {
+                const openingBalance = prevActualBal !== null ? prevActualBal : db.base.balance;
+                aE = openingBalance + aI - aB;
+                prevActualBal = aB;
+            }
             
             // 下個月的參考起點，如果本月有實際結餘就用實際值，否則沿用預估值
             if(act) { 
